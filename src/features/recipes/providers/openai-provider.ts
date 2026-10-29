@@ -50,7 +50,7 @@ export class OpenAIRecipeProvider implements RecipeProvider {
           store: false,
           instructions: prompt.system,
           input: prompt.user,
-          max_output_tokens: 5000,
+          max_output_tokens: 7000,
           text: {
             format: {
               type: "json_schema",

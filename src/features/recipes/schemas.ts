@@ -9,6 +9,7 @@ export const DietSchema = z.enum([
 ]);
 export const SpiceLevelSchema = z.enum(["mild", "medium", "hot"]);
 export const LanguageSchema = z.enum(["en", "hi", "hinglish"]);
+export const DifficultySchema = z.enum(["easy", "medium", "hard"]);
 export const DietaryTagSchema = z.enum([
   "vegetarian",
   "vegan",
@@ -80,7 +81,16 @@ const InstructionSchema = z
   })
   .strict();
 
-const SubstitutionSchema = z
+export const NutritionSchema = z
+  .object({
+    calories: z.number().int().min(0).max(3000),
+    proteinG: z.number().min(0).max(300),
+    carbsG: z.number().min(0).max(500),
+    fatG: z.number().min(0).max(300),
+  })
+  .strict();
+
+export const SubstitutionSchema = z
   .object({
     originalIngredient: z.string().min(1).max(80),
     alternative: z.string().min(1).max(80),
@@ -102,6 +112,11 @@ export const RecipeCandidateSchema = z
     instructions: z.array(InstructionSchema).min(2).max(20),
     substitutions: z.array(SubstitutionSchema).max(10),
     warnings: z.array(z.string().min(1).max(240)).max(8),
+    difficulty: DifficultySchema,
+    equipment: z.array(z.string().min(1).max(60)).max(10),
+    tips: z.array(z.string().min(1).max(240)).max(6),
+    servingSuggestion: z.string().max(240),
+    nutritionPerServing: NutritionSchema,
   })
   .strict();
 
@@ -142,6 +157,8 @@ export type RecipeApiResponse = z.infer<typeof RecipeApiResponseSchema>;
 export type Diet = z.infer<typeof DietSchema>;
 export type SpiceLevel = z.infer<typeof SpiceLevelSchema>;
 export type RecipeLanguage = z.infer<typeof LanguageSchema>;
+export type Difficulty = z.infer<typeof DifficultySchema>;
+export type Nutrition = z.infer<typeof NutritionSchema>;
 
 export const RECIPE_OUTPUT_JSON_SCHEMA = {
   type: "object",
@@ -168,6 +185,11 @@ export const RECIPE_OUTPUT_JSON_SCHEMA = {
           "instructions",
           "substitutions",
           "warnings",
+          "difficulty",
+          "equipment",
+          "tips",
+          "servingSuggestion",
+          "nutritionPerServing",
         ],
         properties: {
           title: { type: "string" },
@@ -228,6 +250,21 @@ export const RECIPE_OUTPUT_JSON_SCHEMA = {
           warnings: {
             type: "array",
             items: { type: "string" },
+          },
+          difficulty: { type: "string", enum: ["easy", "medium", "hard"] },
+          equipment: { type: "array", items: { type: "string" } },
+          tips: { type: "array", items: { type: "string" } },
+          servingSuggestion: { type: "string" },
+          nutritionPerServing: {
+            type: "object",
+            additionalProperties: false,
+            required: ["calories", "proteinG", "carbsG", "fatG"],
+            properties: {
+              calories: { type: "integer" },
+              proteinG: { type: "number" },
+              carbsG: { type: "number" },
+              fatG: { type: "number" },
+            },
           },
         },
       },

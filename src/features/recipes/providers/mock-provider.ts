@@ -19,6 +19,12 @@ const formatText = {
     warning:
       "Sample mock recipe: adjust quantities and cooking time to the ingredients you have.",
     cuisine: "Indian home cooking",
+    tip: "Let the cumin sizzle for a few seconds before adding vegetables.",
+    tip2: "Add salt early so the vegetables release moisture and cook evenly.",
+    serving: "Serve hot with roti, rice or a bowl of curd.",
+    pan: "Kadhai or deep pan",
+    spoon: "Wooden spatula",
+    board: "Knife and chopping board",
   },
   hi: {
     description: "आपकी रसोई की सामग्री से बनी एक आसान घरेलू डिश।",
@@ -31,6 +37,12 @@ const formatText = {
     rice: "पके हुए चावल मिलाएँ और गरम होने तक हल्के हाथ से चलाएँ।",
     warning: "यह नमूना सुझाव है। अपनी सामग्री के अनुसार मात्रा और समय जाँचें।",
     cuisine: "भारतीय घरेलू खाना",
+    tip: "सब्ज़ी डालने से पहले जीरे को कुछ सेकंड चटकने दें।",
+    tip2: "नमक जल्दी डालें ताकि सब्ज़ियाँ पानी छोड़ें और बराबर पकें।",
+    serving: "रोटी, चावल या दही के साथ गरम परोसें।",
+    pan: "कड़ाही या गहरा पैन",
+    spoon: "लकड़ी का चम्मच",
+    board: "चाकू और चॉपिंग बोर्ड",
   },
   hinglish: {
     description: "Aapke pantry ingredients se bani ek easy ghar-style dish.",
@@ -45,6 +57,12 @@ const formatText = {
     warning:
       "Yeh sample suggestion hai. Apne ingredients ke hisaab se quantity aur time check karein.",
     cuisine: "Indian ghar ka khana",
+    tip: "Sabzi daalne se pehle jeera ko kuch second chatakne dein.",
+    tip2: "Namak jaldi daalein taaki sabziyan paani chhodein aur evenly pakein.",
+    serving: "Roti, chawal ya dahi ke saath garam serve karein.",
+    pan: "Kadhai ya deep pan",
+    spoon: "Wooden spatula",
+    board: "Knife aur chopping board",
   },
 } satisfies Record<RecipeLanguage, Record<string, string>>;
 
@@ -153,6 +171,16 @@ function createRecipe(
     })),
     substitutions: [],
     warnings: [language.warning],
+    difficulty: variation === 1 ? "medium" : "easy",
+    equipment: [language.pan, language.spoon, language.board],
+    tips: [language.tip, language.tip2],
+    servingSuggestion: language.serving,
+    // Sample values only; the UI labels nutrition as an approximate estimate.
+    nutritionPerServing: [
+      { calories: 210, proteinG: 4, carbsG: 30, fatG: 8 },
+      { calories: 240, proteinG: 5, carbsG: 28, fatG: 11 },
+      { calories: 320, proteinG: 6, carbsG: 54, fatG: 8 },
+    ][variation],
   };
 }
 

@@ -1,72 +1,90 @@
 "use client";
 
 import { useRef, useState, type FormEvent } from "react";
+import { ChilliDoodle, LeafDoodle } from "@/components/decor/doodles";
 import Link from "next/link";
-import { BrandMark } from "@/components/brand-mark";
+import { BookOpen, Plus } from "lucide-react";
+import { KitchenHero } from "@/components/kitchen3d/kitchen-hero";
+import { buttonClasses } from "@/components/ui/button";
+import { MAX_INGREDIENTS, MAX_INGREDIENT_LENGTH } from "../display";
+import { isRecipeErrorCode, type RecipeErrorCode } from "../error-copy";
 import { normalizeIngredients } from "../normalize";
 import {
   RecipeApiErrorSchema,
   RecipeApiResponseSchema,
   type Diet,
   type Recipe,
-  type RecipeLanguage,
   type RecipeRequest,
   type SpiceLevel,
 } from "../schemas";
+import { useRecipeLanguage } from "../language-context";
+import { HowItWorks } from "./how-it-works";
 import { IngredientForm } from "./ingredient-form";
-import { RecipeCard } from "./recipe-card";
 import { RecipeDetailDialog } from "./recipe-detail-dialog";
+import { RecipeResults } from "./recipe-results";
 
 type WorkspaceStatus = "idle" | "loading" | "success" | "error";
 
-const sampleIngredients = ["potato", "tomato", "peas"];
+class RecipeRequestError extends Error {
+  constructor(readonly code: RecipeErrorCode) {
+    super(code);
+    this.name = "RecipeRequestError";
+  }
+}
 
-export function RecipeWorkspace() {
+function splitIngredients(value: string): string[] {
+  return value
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+export function RecipeWorkspace({ signedIn }: { signedIn: boolean }) {
   const [ingredients, setIngredients] = useState<string[]>([]);
   const [ingredientDraft, setIngredientDraft] = useState("");
   const [servings, setServings] = useState(2);
   const [diet, setDiet] = useState<Diet>("vegetarian");
   const [spiceLevel, setSpiceLevel] = useState<SpiceLevel>("medium");
   const [maxMinutes, setMaxMinutes] = useState<number>();
-  const [language, setLanguage] = useState<RecipeLanguage>("en");
+  const [language, setLanguage] = useRecipeLanguage();
   const [validationMessage, setValidationMessage] = useState("");
   const [status, setStatus] = useState<WorkspaceStatus>("idle");
-  const [errorMessage, setErrorMessage] = useState("");
+  const [errorCode, setErrorCode] = useState<RecipeErrorCode | null>(null);
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [generationMode, setGenerationMode] = useState<"mock" | "ai">("mock");
   const [selectedRecipe, setSelectedRecipe] = useState<Recipe | null>(null);
   const [lastRequest, setLastRequest] = useState<RecipeRequest | null>(null);
   const resultsRef = useRef<HTMLElement>(null);
+  const resultsHeadingRef = useRef<HTMLHeadingElement>(null);
+  const ingredientInputRef = useRef<HTMLInputElement>(null);
 
   const isLoading = status === "loading";
 
-  function addIngredient(value = ingredientDraft) {
-    const parts = value
-      .split(",")
-      .map((part) => part.trim())
-      .filter(Boolean);
-
-    if (parts.some((part) => part.length > 80)) {
+  /** Adds ingredients; returns false (and shows why) if they don't fit. */
+  function appendIngredients(parts: string[]): boolean {
+    if (parts.some((part) => part.length > MAX_INGREDIENT_LENGTH)) {
       setValidationMessage("Keep each ingredient under 80 characters.");
-      return;
+      return false;
     }
 
     const nextIngredients = normalizeIngredients([...ingredients, ...parts]);
-    if (nextIngredients.length > 30) {
+    if (nextIngredients.length > MAX_INGREDIENTS) {
       setValidationMessage("Add up to 30 ingredients.");
-      return;
+      return false;
     }
 
     setIngredients(nextIngredients);
-    setIngredientDraft("");
     setValidationMessage("");
+    return true;
   }
 
-  function addSampleIngredients() {
-    setIngredients((current) =>
-      normalizeIngredients([...current, ...sampleIngredients]).slice(0, 30),
-    );
-    setValidationMessage("");
+  function addFromText(value: string) {
+    if (appendIngredients(splitIngredients(value))) setIngredientDraft("");
+  }
+
+  function toggleSuggestion(name: string) {
+    if (ingredients.includes(name)) removeIngredient(name);
+    else appendIngredients([name]);
   }
 
   function removeIngredient(target: string) {
@@ -75,64 +93,74 @@ export function RecipeWorkspace() {
     );
   }
 
+  function editIngredients() {
+    const input = ingredientInputRef.current;
+    if (!input) return;
+    input.scrollIntoView({ block: "center" });
+    input.focus({ preventScroll: true });
+  }
+
   async function generateRecipes(request: RecipeRequest) {
     setLastRequest(request);
     setStatus("loading");
-    setErrorMessage("");
+    setErrorCode(null);
     setValidationMessage("");
     setRecipes([]);
+    window.requestAnimationFrame(() => {
+      resultsRef.current?.scrollIntoView({ block: "start" });
+    });
 
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 25_000);
 
     try {
-      const response = await fetch("/api/recipes", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(request),
-        signal: controller.signal,
-      });
+      let response: Response;
+      try {
+        response = await fetch("/api/recipes", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(request),
+          signal: controller.signal,
+        });
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") throw error;
+        throw new RecipeRequestError("NETWORK");
+      }
 
       let payload: unknown;
       try {
         payload = await response.json();
       } catch {
-        throw new Error("The recipe service returned an unreadable response.");
+        throw new RecipeRequestError("UNREADABLE_RESPONSE");
       }
 
       if (!response.ok) {
         const apiError = RecipeApiErrorSchema.safeParse(payload);
-        throw new Error(
-          apiError.success
-            ? apiError.data.error.message
-            : "Recipe generation is temporarily unavailable.",
+        const code = apiError.success ? apiError.data.error.code : "";
+        throw new RecipeRequestError(
+          isRecipeErrorCode(code) ? code : "PROVIDER_ERROR",
         );
       }
 
       const parsed = RecipeApiResponseSchema.safeParse(payload);
       if (!parsed.success) {
-        throw new Error(
-          "We couldn’t read those recipe suggestions. Please try again.",
-        );
+        throw new RecipeRequestError("UNREADABLE_RESPONSE");
       }
 
       setRecipes(parsed.data.recipes);
       setGenerationMode(parsed.data.generationMode);
       setStatus("success");
       window.requestAnimationFrame(() => {
-        resultsRef.current?.scrollIntoView({
-          behavior: "smooth",
-          block: "start",
-        });
+        resultsHeadingRef.current?.focus();
       });
     } catch (error) {
       setStatus("error");
       if (error instanceof Error && error.name === "AbortError") {
-        setErrorMessage("The request took too long. Please try again.");
-      } else if (error instanceof Error) {
-        setErrorMessage(error.message);
+        setErrorCode("CLIENT_TIMEOUT");
+      } else if (error instanceof RecipeRequestError) {
+        setErrorCode(error.code);
       } else {
-        setErrorMessage("Something went wrong while finding recipes.");
+        setErrorCode("INTERNAL_ERROR");
       }
     } finally {
       window.clearTimeout(timeout);
@@ -142,11 +170,8 @@ export function RecipeWorkspace() {
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    const draftParts = ingredientDraft
-      .split(",")
-      .map((part) => part.trim())
-      .filter(Boolean);
-    if (draftParts.some((part) => part.length > 80)) {
+    const draftParts = splitIngredients(ingredientDraft);
+    if (draftParts.some((part) => part.length > MAX_INGREDIENT_LENGTH)) {
       setValidationMessage("Keep each ingredient under 80 characters.");
       return;
     }
@@ -159,7 +184,7 @@ export function RecipeWorkspace() {
       setValidationMessage("Add at least one ingredient to get recipe ideas.");
       return;
     }
-    if (submittedIngredients.length > 30) {
+    if (submittedIngredients.length > MAX_INGREDIENTS) {
       setValidationMessage("Add up to 30 ingredients.");
       return;
     }
@@ -181,217 +206,139 @@ export function RecipeWorkspace() {
   }
 
   return (
-    <div className="site-frame">
-      <header className="site-header">
-        <Link className="brand-lockup" href="/" aria-label="Sanixor Rasoi home">
-          <BrandMark />
-          <span className="brand-words">
-            <strong>sanixor</strong>
-            <span>rasoi</span>
-          </span>
-        </Link>
-        <div className="header-note">
-          <span className="header-note-dot" aria-hidden="true" />A little help
-          for the everyday kitchen
-        </div>
-      </header>
-
-      <main>
-        <section className="hero-grid" aria-labelledby="page-title">
-          <div className="hero-copy">
-            <p className="hero-kicker">
-              <span className="kicker-line" aria-hidden="true" />
-              EVERYDAY COOKING, MADE EASIER
-            </p>
-            <h1 id="page-title">
-              Good meals begin with <em>what you have.</em>
-            </h1>
-            <p className="hero-description">
-              A few things in the fridge. A little inspiration. Let’s make
-              something lovely from what’s already in your kitchen.
-            </p>
-
-            <div className="hero-note">
-              <span className="hero-note-mark" aria-hidden="true">
-                <svg viewBox="0 0 48 48" fill="none">
-                  <path
-                    d="M10 29c2.5-9.4 11-15.6 22-15-1 11-7.8 19.4-18.2 20.5"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                  />
-                  <path
-                    d="M14 36c5-8 10-13 17-18"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                  />
-                  <path
-                    d="M20 23c3.8.2 6 1.8 7 5"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                  />
-                </svg>
-              </span>
-              <div>
-                <strong>Start simple</strong>
-                <p>Tell us what’s on hand. We’ll take it from there.</p>
-              </div>
-              <span className="note-spark" aria-hidden="true">
-                ✳
-              </span>
-            </div>
-
-            <div className="hero-footnote">
-              <span className="avatar-stack" aria-hidden="true">
-                <i>स</i>
-                <i>R</i>
-                <i>🌿</i>
-              </span>
-              <span>Made for real kitchens and real days.</span>
-            </div>
-          </div>
-
-          <IngredientForm
-            ingredients={ingredients}
-            ingredientDraft={ingredientDraft}
-            servings={servings}
-            diet={diet}
-            spiceLevel={spiceLevel}
-            maxMinutes={maxMinutes}
-            language={language}
-            isLoading={isLoading}
-            validationMessage={validationMessage}
-            onDraftChange={(value) => {
-              setIngredientDraft(value);
-              if (validationMessage) setValidationMessage("");
-            }}
-            onAddIngredient={() => addIngredient()}
-            onRemoveIngredient={removeIngredient}
-            onServingsChange={setServings}
-            onDietChange={setDiet}
-            onSpiceLevelChange={setSpiceLevel}
-            onMaxMinutesChange={setMaxMinutes}
-            onLanguageChange={setLanguage}
-            onSubmit={handleSubmit}
-          />
-        </section>
-
+    <>
+      <main id="main" className="mx-auto max-w-[1200px] px-4 sm:px-6 lg:px-8">
         <section
-          className="results-section"
-          ref={resultsRef}
-          aria-labelledby="results-title"
+          aria-labelledby="page-title"
+          className="relative grid gap-10 pt-8 pb-16 sm:pt-12 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)] lg:gap-14 lg:pt-16"
         >
-          <div className="results-heading">
-            <div>
-              <p className="eyebrow">
-                {status === "success"
-                  ? "A little inspiration"
-                  : "Your kitchen, your call"}
-              </p>
-              <h2 id="results-title">
-                {status === "success"
-                  ? "Your recipe ideas"
-                  : "A good place to start"}
-              </h2>
+          <div className="relative min-w-0">
+            <LeafDoodle className="text-leaf absolute -top-2 right-0 size-14 opacity-30 lg:hidden" />
+            <p className="text-accent-strong mb-3 text-sm font-semibold tracking-[0.12em] uppercase">
+              Indian recipes from your pantry
+            </p>
+            <h1
+              id="page-title"
+              className="font-display text-[2.25rem] leading-[1.06] font-semibold tracking-tight sm:text-5xl lg:text-[3.75rem]"
+            >
+              What&apos;s in your kitchen{" "}
+              <span className="text-accent-strong italic">today?</span>
+            </h1>
+            <p className="text-ink-muted mt-4 max-w-xl text-[1.05rem] sm:text-lg">
+              Tell us your ingredients — we&apos;ll suggest Indian recipes you
+              can cook right now.
+            </p>
+            <p
+              lang="hi"
+              className="font-display text-ink mt-2 text-lg sm:text-xl"
+            >
+              आपकी रसोई, आपकी रेसिपी।
+            </p>
+
+            <div id="kitchen" className="mt-8 scroll-mt-24">
+              <IngredientForm
+                ingredients={ingredients}
+                ingredientDraft={ingredientDraft}
+                servings={servings}
+                diet={diet}
+                spiceLevel={spiceLevel}
+                maxMinutes={maxMinutes}
+                language={language}
+                isLoading={isLoading}
+                validationMessage={validationMessage}
+                inputRef={ingredientInputRef}
+                onDraftChange={(value) => {
+                  setIngredientDraft(value);
+                  if (validationMessage) setValidationMessage("");
+                }}
+                onAddDraft={() => addFromText(ingredientDraft)}
+                onPasteIngredients={addFromText}
+                onToggleSuggestion={toggleSuggestion}
+                onRemoveIngredient={removeIngredient}
+                onServingsChange={setServings}
+                onDietChange={setDiet}
+                onSpiceLevelChange={setSpiceLevel}
+                onMaxMinutesChange={setMaxMinutes}
+                onLanguageChange={setLanguage}
+                onSubmit={handleSubmit}
+              />
             </div>
-            {status === "success" && (
-              <span className="result-count">
-                {recipes.length} ideas for your table
-              </span>
-            )}
           </div>
 
-          {status === "success" && generationMode === "mock" && (
-            <div className="mock-notice" role="status">
-              <span className="mock-notice-dot" aria-hidden="true" />
-              Sample suggestions are showing. Add an API key to enable
-              AI-generated recipes.
-            </div>
-          )}
-
-          {status === "loading" && (
-            <div className="results-status" role="status" aria-live="polite">
-              <span className="status-orbit" aria-hidden="true">
-                <i />
-              </span>
-              <div>
-                <strong>Looking through your pantry…</strong>
-                <p>Finding a few dishes that fit your time and taste.</p>
-              </div>
-            </div>
-          )}
-
-          {status === "error" && (
-            <div className="results-error" role="alert">
-              <div>
-                <strong>We couldn’t find your recipes this time.</strong>
-                <p>{errorMessage}</p>
-              </div>
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={() => lastRequest && void generateRecipes(lastRequest)}
+          <div className="relative">
+            <div className="lg:sticky lg:top-28">
+              <ChilliDoodle className="text-chilli absolute right-2 bottom-24 size-16 -rotate-12 opacity-30 max-lg:hidden" />
+              <KitchenHero
+                onCook={editIngredients}
+                onAddIngredients={(items) => {
+                  appendIngredients(items);
+                  editIngredients();
+                }}
+                onQuickMeal={(minutes) => {
+                  setMaxMinutes(minutes);
+                  editIngredients();
+                }}
+              />
+              <nav
+                aria-label="Kitchen shortcuts"
+                className="mt-4 flex flex-wrap justify-center gap-2"
               >
-                Try again <span aria-hidden="true">↻</span>
-              </button>
+                <Link
+                  href="/book"
+                  className={buttonClasses({
+                    variant: "secondary",
+                    size: "sm",
+                  })}
+                >
+                  <BookOpen className="size-4" aria-hidden="true" />
+                  Recipe book
+                </Link>
+                <Link
+                  href="/book/new"
+                  className={buttonClasses({
+                    variant: "secondary",
+                    size: "sm",
+                  })}
+                >
+                  <Plus className="size-4" aria-hidden="true" />
+                  Add your recipe
+                </Link>
+              </nav>
             </div>
-          )}
-
-          {status === "success" && (
-            <div className="recipe-grid">
-              {recipes.map((recipe, index) => (
-                <RecipeCard
-                  recipe={recipe}
-                  index={index}
-                  onOpen={setSelectedRecipe}
-                  key={recipe.id}
-                />
-              ))}
-            </div>
-          )}
-
-          {status === "idle" && (
-            <div className="empty-state">
-              <div className="empty-illustration" aria-hidden="true">
-                <span className="empty-plate" />
-                <span className="empty-leaf leaf-one" />
-                <span className="empty-leaf leaf-two" />
-                <span className="empty-tomato" />
-              </div>
-              <div>
-                <strong>Your next favourite meal might be in here.</strong>
-                <p>Add a few ingredients above to see where they take you.</p>
-              </div>
-              <button
-                className="text-button"
-                type="button"
-                onClick={addSampleIngredients}
-              >
-                Try a few pantry staples <span aria-hidden="true">↑</span>
-              </button>
-            </div>
-          )}
+          </div>
         </section>
-      </main>
 
-      <footer className="site-footer">
-        <Link className="footer-brand" href="/">
-          <BrandMark />
-          <span>Sanixor Rasoi</span>
-        </Link>
-        <p>
-          Recipes are AI-generated suggestions. Check ingredients, allergens,
-          and food-safety guidance.
-        </p>
-        <span className="footer-signoff">Cook something good today.</span>
-      </footer>
+        {status !== "idle" && lastRequest && (
+          <section
+            ref={resultsRef}
+            aria-labelledby="results-title"
+            className="border-line scroll-mt-24 border-t pt-12 pb-16"
+          >
+            <RecipeResults
+              status={status}
+              request={lastRequest}
+              recipes={recipes}
+              generationMode={generationMode}
+              errorCode={errorCode}
+              headingRef={resultsHeadingRef}
+              onRetry={() => void generateRecipes(lastRequest)}
+              onEditIngredients={editIngredients}
+              onOpenRecipe={setSelectedRecipe}
+            />
+          </section>
+        )}
+
+        <div className="border-line border-t pt-14">
+          <HowItWorks />
+        </div>
+      </main>
 
       <RecipeDetailDialog
         recipe={selectedRecipe}
+        request={lastRequest}
+        signedIn={signedIn}
         onClose={() => setSelectedRecipe(null)}
       />
-    </div>
+    </>
   );
 }

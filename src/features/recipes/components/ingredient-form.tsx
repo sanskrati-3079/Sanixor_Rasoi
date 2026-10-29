@@ -1,6 +1,24 @@
 "use client";
 
-import type { FormEvent, KeyboardEvent } from "react";
+import type {
+  ClipboardEvent,
+  FormEvent,
+  KeyboardEvent,
+  RefObject,
+} from "react";
+import { clsx } from "clsx";
+import { Plus, Sparkles } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Chip, ChipToggle } from "@/components/ui/chip";
+import { DietMark, dietLabels } from "@/components/ui/diet-badge";
+import { SegmentedControl } from "@/components/ui/segmented-control";
+import { ChilliRow } from "@/components/ui/spice-meter";
+import { Stepper } from "@/components/ui/stepper";
+import {
+  MAX_INGREDIENTS,
+  languageOptions,
+  quickAddIngredients,
+} from "../display";
 import type { Diet, RecipeLanguage, SpiceLevel } from "../schemas";
 
 type IngredientFormProps = {
@@ -13,8 +31,11 @@ type IngredientFormProps = {
   language: RecipeLanguage;
   isLoading: boolean;
   validationMessage: string;
+  inputRef: RefObject<HTMLInputElement | null>;
   onDraftChange: (value: string) => void;
-  onAddIngredient: () => void;
+  onAddDraft: () => void;
+  onPasteIngredients: (text: string) => void;
+  onToggleSuggestion: (ingredient: string) => void;
   onRemoveIngredient: (ingredient: string) => void;
   onServingsChange: (value: number) => void;
   onDietChange: (value: Diet) => void;
@@ -24,15 +45,20 @@ type IngredientFormProps = {
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 };
 
-const spiceOptions: {
-  value: SpiceLevel;
-  label: string;
-  description: string;
-}[] = [
-  { value: "mild", label: "Mild", description: "Gentle warmth" },
-  { value: "medium", label: "Medium", description: "Balanced heat" },
-  { value: "hot", label: "Hot", description: "Bring the heat" },
+const dietOrder: Diet[] = [
+  "vegetarian",
+  "vegan",
+  "eggetarian",
+  "non-vegetarian",
 ];
+
+const spiceOptions: { value: SpiceLevel; label: string }[] = [
+  { value: "mild", label: "Mild" },
+  { value: "medium", label: "Medium" },
+  { value: "hot", label: "Hot" },
+];
+
+const timeOptions = ["any", "15", "30", "45", "60", "90"] as const;
 
 export function IngredientForm({
   ingredients,
@@ -44,8 +70,11 @@ export function IngredientForm({
   language,
   isLoading,
   validationMessage,
+  inputRef,
   onDraftChange,
-  onAddIngredient,
+  onAddDraft,
+  onPasteIngredients,
+  onToggleSuggestion,
   onRemoveIngredient,
   onServingsChange,
   onDietChange,
@@ -54,209 +83,254 @@ export function IngredientForm({
   onLanguageChange,
   onSubmit,
 }: IngredientFormProps) {
-  function handleIngredientKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+  const hasAnything = ingredients.length > 0 || ingredientDraft.trim() !== "";
+
+  function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key === "Enter" || event.key === ",") {
       event.preventDefault();
-      onAddIngredient();
+      onAddDraft();
+    } else if (
+      event.key === "Backspace" &&
+      ingredientDraft === "" &&
+      ingredients.length > 0
+    ) {
+      onRemoveIngredient(ingredients[ingredients.length - 1]);
+    }
+  }
+
+  function handlePaste(event: ClipboardEvent<HTMLInputElement>) {
+    const text = event.clipboardData.getData("text");
+    if (/[,\n]/u.test(text)) {
+      event.preventDefault();
+      onPasteIngredients(ingredientDraft + text.replace(/\r?\n/gu, ","));
     }
   }
 
   return (
-    <form className="pantry-form" onSubmit={onSubmit} noValidate>
-      <div className="form-heading">
-        <div>
-          <p className="eyebrow">Start with your pantry</p>
-          <h2>What do you have?</h2>
+    <form
+      onSubmit={onSubmit}
+      noValidate
+      aria-labelledby="kitchen-form-title"
+      className="rounded-panel glass-strong p-5 sm:p-7"
+    >
+      <h2
+        id="kitchen-form-title"
+        className="font-display text-2xl font-semibold tracking-tight"
+      >
+        Your ingredients
+      </h2>
+
+      <div className="mt-4">
+        <div className="mb-2 flex items-baseline justify-between gap-3">
+          <label htmlFor="ingredient-input" className="text-sm font-semibold">
+            Add what you have
+          </label>
+          <span
+            id="ingredient-count"
+            className={clsx(
+              "text-sm tabular-nums",
+              ingredients.length >= MAX_INGREDIENTS
+                ? "text-danger font-semibold"
+                : "text-ink-muted",
+            )}
+          >
+            {ingredients.length} / {MAX_INGREDIENTS} ingredients
+          </span>
         </div>
-        <span className="step-indicator" aria-label="Step 1 of 1">
-          01 <span>/ 01</span>
-        </span>
+
+        <div
+          className="rounded-field border-line-strong bg-canvas focus-within:border-accent-strong focus-within:bg-surface flex flex-wrap items-center gap-2 border-2 p-2 transition-colors duration-150"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) inputRef.current?.focus();
+          }}
+        >
+          {ingredients.length > 0 && (
+            <ul
+              className="flex w-full flex-wrap gap-2"
+              aria-label="Added ingredients"
+            >
+              {ingredients.map((ingredient) => (
+                <li key={ingredient} className="max-w-full">
+                  <Chip
+                    onRemove={() => onRemoveIngredient(ingredient)}
+                    removeLabel={"Remove " + ingredient}
+                  >
+                    {ingredient}
+                  </Chip>
+                </li>
+              ))}
+            </ul>
+          )}
+          <input
+            ref={inputRef}
+            id="ingredient-input"
+            type="text"
+            value={ingredientDraft}
+            onChange={(event) => onDraftChange(event.target.value)}
+            onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
+            placeholder={
+              ingredients.length ? "Add another…" : "e.g. potato, onion, peas"
+            }
+            autoComplete="off"
+            enterKeyHint="enter"
+            maxLength={2400}
+            aria-describedby="ingredient-help ingredient-count"
+            className="text-ink placeholder:text-ink-muted min-h-11 min-w-[8rem] flex-1 bg-transparent px-2 text-base focus:outline-none"
+          />
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={onAddDraft}
+            disabled={!ingredientDraft.trim()}
+            className="shrink-0"
+          >
+            <Plus className="size-4" aria-hidden="true" />
+            Add
+          </Button>
+        </div>
+        <p id="ingredient-help" className="text-ink-muted mt-2 text-sm">
+          Press Enter or type a comma after each one. You can paste a whole
+          list.
+        </p>
       </div>
 
-      <label className="field-label" htmlFor="ingredient-input">
-        Ingredients <span className="required-note">Add at least one</span>
-      </label>
-      <div className="ingredient-entry">
-        <input
-          id="ingredient-input"
-          type="text"
-          value={ingredientDraft}
-          onChange={(event) => onDraftChange(event.target.value)}
-          onKeyDown={handleIngredientKeyDown}
-          placeholder="e.g. potatoes, peas, onion"
-          autoComplete="off"
-          maxLength={2400}
-          aria-describedby="ingredient-help"
-        />
-        <button
-          className="add-ingredient-button"
-          type="button"
-          onClick={onAddIngredient}
-          disabled={!ingredientDraft.trim()}
-          aria-label="Add ingredient"
-        >
-          <span aria-hidden="true">+</span>
-          Add
-        </button>
-      </div>
-      <p id="ingredient-help" className="field-help">
-        Press Enter or separate items with commas.
-      </p>
-
-      {ingredients.length > 0 && (
-        <ul
-          className="ingredient-chips"
-          aria-label="Ingredients in your pantry"
-        >
-          {ingredients.map((ingredient) => (
-            <li className="ingredient-chip" key={ingredient}>
-              <span>{ingredient}</span>
-              <button
-                type="button"
-                onClick={() => onRemoveIngredient(ingredient)}
-                aria-label={"Remove " + ingredient}
+      <div className="mt-5">
+        <p id="quick-add-label" className="mb-2 text-sm font-semibold">
+          Quick add
+        </p>
+        <ul aria-labelledby="quick-add-label" className="flex flex-wrap gap-2">
+          {quickAddIngredients.map((name) => (
+            <li key={name}>
+              <ChipToggle
+                pressed={ingredients.includes(name)}
+                onClick={() => onToggleSuggestion(name)}
               >
-                <span aria-hidden="true">×</span>
-              </button>
+                {name}
+              </ChipToggle>
             </li>
           ))}
         </ul>
-      )}
-
-      <div className="preference-grid">
-        <div className="field-group">
-          <label className="field-label" htmlFor="diet-select">
-            Dietary preference
-          </label>
-          <select
-            id="diet-select"
-            value={diet}
-            onChange={(event) => onDietChange(event.target.value as Diet)}
-          >
-            <option value="vegetarian">Vegetarian</option>
-            <option value="vegan">Vegan</option>
-            <option value="eggetarian">Eggetarian</option>
-            <option value="non-vegetarian">Non-vegetarian</option>
-          </select>
-        </div>
-
-        <div className="field-group">
-          <label className="field-label" htmlFor="servings-input">
-            Servings
-          </label>
-          <div className="number-input-wrap">
-            <input
-              id="servings-input"
-              type="number"
-              min={1}
-              max={12}
-              value={servings}
-              onChange={(event) => onServingsChange(Number(event.target.value))}
-            />
-            <span className="input-suffix">people</span>
-          </div>
-        </div>
-
-        <div className="field-group">
-          <label className="field-label" htmlFor="time-select">
-            Ready in
-          </label>
-          <select
-            id="time-select"
-            value={maxMinutes ?? ""}
-            onChange={(event) =>
-              onMaxMinutesChange(
-                event.target.value ? Number(event.target.value) : undefined,
-              )
-            }
-          >
-            <option value="">Any time</option>
-            <option value={15}>15 minutes</option>
-            <option value={30}>30 minutes</option>
-            <option value={45}>45 minutes</option>
-            <option value={60}>60 minutes</option>
-            <option value={90}>90 minutes</option>
-          </select>
-        </div>
-
-        <div className="field-group">
-          <label className="field-label" htmlFor="language-select">
-            Recipe language
-          </label>
-          <select
-            id="language-select"
-            value={language}
-            onChange={(event) =>
-              onLanguageChange(event.target.value as RecipeLanguage)
-            }
-          >
-            <option value="en">English</option>
-            <option value="hi">हिन्दी</option>
-            <option value="hinglish">Hinglish</option>
-          </select>
-        </div>
       </div>
 
-      <fieldset className="spice-fieldset">
-        <legend className="field-label">Spice level</legend>
-        <div className="spice-options">
-          {spiceOptions.map((option, index) => (
-            <label
-              className={
-                "spice-option" +
-                (spiceLevel === option.value ? " is-selected" : "")
-              }
-              key={option.value}
-            >
-              <input
-                type="radio"
-                name="spice-level"
-                value={option.value}
-                checked={spiceLevel === option.value}
-                onChange={() => onSpiceLevelChange(option.value)}
-              />
-              <span className="spice-indicator" aria-hidden="true">
-                {Array.from({ length: 3 }, (_, dotIndex) => (
-                  <span
-                    className={dotIndex <= index ? "is-filled" : ""}
-                    key={dotIndex}
-                  />
-                ))}
-              </span>
-              <span className="spice-copy">
-                <strong>{option.label}</strong>
-                <small>{option.description}</small>
-              </span>
-            </label>
-          ))}
+      <section
+        aria-labelledby="preferences-title"
+        className="bg-sky/60 mt-7 rounded-[22px] p-4 sm:p-5"
+      >
+        <h3
+          id="preferences-title"
+          className="font-display text-xl font-semibold"
+        >
+          Your preferences
+        </h3>
+
+        <div className="mt-4 grid gap-5">
+          <Stepper
+            label="Servings"
+            value={servings}
+            min={1}
+            max={12}
+            unit={servings === 1 ? "person" : "people"}
+            onChange={onServingsChange}
+          />
+
+          <SegmentedControl
+            legend="Diet"
+            name="diet"
+            value={diet}
+            onChange={onDietChange}
+            options={dietOrder.map((value) => ({
+              value,
+              label: dietLabels[value],
+              icon: (
+                <span className="bg-surface grid size-6 place-items-center rounded-md">
+                  <DietMark diet={value} />
+                </span>
+              ),
+            }))}
+          />
+
+          <SegmentedControl
+            legend="Spice level"
+            name="spice-level"
+            value={spiceLevel}
+            onChange={onSpiceLevelChange}
+            options={spiceOptions.map((option) => ({
+              value: option.value,
+              label: option.label,
+              icon: (
+                <span className="bg-surface inline-flex rounded-full px-1.5 py-0.5">
+                  <ChilliRow level={option.value} />
+                </span>
+              ),
+            }))}
+          />
+
+          <SegmentedControl
+            legend="Ready in"
+            name="max-minutes"
+            value={maxMinutes ? String(maxMinutes) : "any"}
+            onChange={(value) =>
+              onMaxMinutesChange(value === "any" ? undefined : Number(value))
+            }
+            options={timeOptions.map((value) => ({
+              value,
+              label: value === "any" ? "Any time" : value + " min",
+            }))}
+          />
+
+          <SegmentedControl
+            legend="Recipe language"
+            name="language"
+            value={language}
+            onChange={onLanguageChange}
+            options={languageOptions.map((option) => ({
+              value: option.value,
+              label: option.label,
+              lang: option.tag,
+            }))}
+          />
         </div>
-      </fieldset>
+      </section>
 
-      {validationMessage && (
-        <p className="form-error" role="alert">
-          <span aria-hidden="true">!</span>
-          {validationMessage}
-        </p>
-      )}
+      <p
+        aria-live="polite"
+        className={clsx(
+          "text-danger text-[0.95rem] font-medium",
+          validationMessage &&
+            "rounded-field border-danger/30 bg-danger-soft mt-5 border px-4 py-3",
+        )}
+      >
+        {validationMessage}
+      </p>
 
-      <button className="generate-button" type="submit" disabled={isLoading}>
+      <Button
+        type="submit"
+        size="lg"
+        fullWidth
+        className="mt-6"
+        disabled={isLoading || !hasAnything}
+        aria-describedby={hasAnything ? undefined : "generate-hint"}
+      >
         {isLoading ? (
           <>
-            <span className="button-spinner" aria-hidden="true" />
-            Finding something delicious…
+            <span
+              className="border-ink/30 border-t-ink size-5 animate-spin rounded-full border-2"
+              aria-hidden="true"
+            />
+            Cooking up ideas…
           </>
         ) : (
           <>
-            Find my recipes
-            <span className="button-arrow" aria-hidden="true">
-              →
-            </span>
+            <Sparkles className="size-5" aria-hidden="true" />
+            Generate Recipes
           </>
         )}
-      </button>
-
-      <p className="form-footnote">
-        No sign-up. Just good ideas from what you have.
+      </Button>
+      <p id="generate-hint" className="text-ink-muted mt-3 text-center text-sm">
+        {hasAnything
+          ? "No sign-up needed. Recipes are suggestions — check allergens before cooking."
+          : "Add at least one ingredient to get recipe ideas."}
       </p>
     </form>
   );

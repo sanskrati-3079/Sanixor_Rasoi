@@ -1,27 +1,78 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { Recipe } from "../schemas";
+import Link from "next/link";
+import { clsx } from "clsx";
+import { ArrowLeft, BookmarkPlus, Check, ChefHat } from "lucide-react";
+import { Button, buttonClasses } from "@/components/ui/button";
+import type { BookRecipeInput } from "../../recipe-book/schemas";
+import type { Recipe, RecipeRequest } from "../schemas";
+import { fromAiRecipe, type RecipeViewModel } from "../view-model";
+import { CookMode } from "./cook-mode";
+import { RecipeView } from "./recipe-view";
 
 type RecipeDetailDialogProps = {
   recipe: Recipe | null;
+  request: RecipeRequest | null;
+  signedIn: boolean;
   onClose: () => void;
 };
 
-function formatQuantity(quantity: number): string {
-  return new Intl.NumberFormat("en-IN", {
-    maximumFractionDigits: 2,
-  }).format(quantity);
+type SaveState =
+  | { status: "idle" }
+  | { status: "saving" }
+  | { status: "saved"; id: string }
+  | { status: "error"; message: string };
+
+function toBookInput(
+  view: RecipeViewModel,
+  recipe: Recipe,
+  request: RecipeRequest,
+): BookRecipeInput {
+  return {
+    title: recipe.title,
+    description: recipe.description,
+    cuisine: recipe.cuisine,
+    language: request.language,
+    servings: recipe.servings,
+    prepTimeMinutes: recipe.prepTimeMinutes,
+    cookTimeMinutes: recipe.cookTimeMinutes,
+    difficulty: recipe.difficulty,
+    diet: view.diet ?? request.diet,
+    spiceLevel: request.spiceLevel,
+    ingredients: recipe.ingredients.map(({ name, quantity, unit, note }) => ({
+      name,
+      quantity,
+      unit,
+      note,
+    })),
+    instructions: recipe.instructions.map(({ text, durationMinutes }) => ({
+      text,
+      durationMinutes,
+    })),
+    equipment: recipe.equipment,
+    tips: recipe.tips,
+    servingSuggestion: recipe.servingSuggestion,
+    nutritionPerServing: recipe.nutritionPerServing,
+    substitutions: recipe.substitutions,
+    warnings: recipe.warnings,
+    video: { kind: "none" },
+    photoUploadId: null,
+    source: "ai",
+  };
 }
 
 export function RecipeDetailDialog({
   recipe,
+  request,
+  signedIn,
   onClose,
 }: RecipeDetailDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const [servingSelection, setServingSelection] = useState<{
+  const [cooking, setCooking] = useState(false);
+  const [save, setSave] = useState<{
     recipeId: string;
-    servings: number;
+    state: SaveState;
   } | null>(null);
 
   useEffect(() => {
@@ -32,181 +83,127 @@ export function RecipeDetailDialog({
     if (!recipe && dialog.open) dialog.close();
   }, [recipe]);
 
-  if (!recipe) return null;
+  if (!recipe || !request) return null;
 
-  const servings =
-    servingSelection?.recipeId === recipe.id
-      ? servingSelection.servings
-      : recipe.servings;
-  const updateServings = (value: number) =>
-    setServingSelection({ recipeId: recipe.id, servings: value });
+  const view = fromAiRecipe(recipe, request.language, request.spiceLevel);
+  const saveState: SaveState =
+    save?.recipeId === recipe.id ? save.state : { status: "idle" };
   const closeDialog = () => dialogRef.current?.close();
-  const scale = servings / recipe.servings;
+
+  async function saveToBook() {
+    if (!recipe || !request) return;
+    const recipeId = recipe.id;
+    setSave({ recipeId, state: { status: "saving" } });
+    try {
+      const response = await fetch("/api/book/recipes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(toBookInput(view, recipe, request)),
+      });
+      const payload = (await response.json().catch(() => null)) as {
+        recipe?: { id: string };
+        error?: { message?: string };
+      } | null;
+      if (!response.ok || !payload?.recipe) {
+        throw new Error(
+          payload?.error?.message ?? "Couldn't save this recipe.",
+        );
+      }
+      setSave({ recipeId, state: { status: "saved", id: payload.recipe.id } });
+    } catch (error) {
+      setSave({
+        recipeId,
+        state: {
+          status: "error",
+          message:
+            error instanceof Error
+              ? error.message
+              : "Couldn't save this recipe.",
+        },
+      });
+    }
+  }
+
+  const actions = (
+    <>
+      <Button onClick={() => setCooking(true)}>
+        <ChefHat className="size-5" aria-hidden="true" />
+        Start cooking
+      </Button>
+      {!signedIn ? (
+        <Link
+          href="/login?next=/"
+          className={buttonClasses({ variant: "secondary" })}
+        >
+          <BookmarkPlus className="size-4" aria-hidden="true" />
+          Sign in to save
+        </Link>
+      ) : saveState.status === "saved" ? (
+        <Link
+          href={"/book/" + saveState.id}
+          className={buttonClasses({ variant: "secondary" })}
+        >
+          <Check className="text-success size-4" aria-hidden="true" />
+          Saved — open in recipe book
+        </Link>
+      ) : (
+        <Button
+          variant="secondary"
+          onClick={() => void saveToBook()}
+          disabled={saveState.status === "saving"}
+        >
+          <BookmarkPlus className="size-4" aria-hidden="true" />
+          {saveState.status === "saving" ? "Saving…" : "Save to recipe book"}
+        </Button>
+      )}
+      <p
+        aria-live="polite"
+        className={clsx(
+          "text-danger w-full text-sm",
+          saveState.status !== "error" && "sr-only",
+        )}
+      >
+        {saveState.status === "error" ? saveState.message : ""}
+      </p>
+    </>
+  );
 
   return (
     <dialog
-      className="recipe-dialog"
       ref={dialogRef}
       aria-labelledby="recipe-dialog-title"
       onClose={() => {
-        setServingSelection(null);
+        setCooking(false);
         onClose();
       }}
       onClick={(event) => {
         if (event.target === event.currentTarget) closeDialog();
       }}
+      className={clsx(
+        "bg-canvas/85 text-ink backdrop:bg-ink/45 m-0 h-dvh max-h-none w-full max-w-none p-0 backdrop-blur-2xl backdrop:backdrop-blur-sm",
+        "md:rounded-panel md:shadow-card-hover md:m-auto md:h-[min(92dvh,960px)] md:w-[min(1120px,calc(100%-3rem))]",
+        "open:animate-fade-up",
+      )}
     >
-      <div className="dialog-content">
-        <div className="dialog-topline">
-          <span className="eyebrow">{recipe.cuisine}</span>
+      <div className="h-full overflow-y-auto overscroll-contain">
+        <div className="glass-strong sticky top-0 z-10 flex items-center justify-between border-x-0 border-t-0 px-4 py-2 sm:px-6">
           <button
-            className="dialog-close"
             type="button"
             onClick={closeDialog}
-            aria-label="Close recipe details"
+            className="text-accent-strong hover:bg-sky inline-flex min-h-11 items-center gap-2 rounded-full px-3 font-semibold transition-colors duration-150"
           >
-            ×
+            <ArrowLeft className="size-5" aria-hidden="true" />
+            Back to results
           </button>
         </div>
-
-        <h2 id="recipe-dialog-title">{recipe.title}</h2>
-        <p className="dialog-description">{recipe.description}</p>
-
-        <div className="detail-stats">
-          <div>
-            <span>PREP</span>
-            <strong>{recipe.prepTimeMinutes} min</strong>
-          </div>
-          <div>
-            <span>COOK</span>
-            <strong>{recipe.cookTimeMinutes} min</strong>
-          </div>
-          <div>
-            <span>TOTAL</span>
-            <strong>{recipe.totalTimeMinutes} min</strong>
-          </div>
-        </div>
-
-        <section className="detail-section">
-          <div className="section-heading-row">
-            <div>
-              <p className="eyebrow">Gather your ingredients</p>
-              <h3>What you’ll need</h3>
-            </div>
-            <div
-              className="serving-control"
-              aria-label="Adjust recipe servings"
-            >
-              <button
-                type="button"
-                onClick={() => updateServings(Math.max(1, servings - 1))}
-                disabled={servings <= 1}
-                aria-label="Decrease servings"
-              >
-                −
-              </button>
-              <span>{servings} servings</span>
-              <button
-                type="button"
-                onClick={() => updateServings(Math.min(12, servings + 1))}
-                disabled={servings >= 12}
-                aria-label="Increase servings"
-              >
-                +
-              </button>
-            </div>
-          </div>
-
-          <ul className="detail-ingredients">
-            {recipe.ingredients.map((item, index) => (
-              <li key={item.name + "-" + index}>
-                <span className="ingredient-check" aria-hidden="true">
-                  {item.isUserProvided ? "✓" : "+"}
-                </span>
-                <span className="detail-ingredient-name">
-                  <strong>{item.name}</strong>
-                  {item.note && <small>{item.note}</small>}
-                </span>
-                <span className="ingredient-quantity">
-                  {formatQuantity(item.quantity * scale)} {item.unit}
-                </span>
-                <span
-                  className={
-                    item.isUserProvided
-                      ? "ingredient-origin is-pantry"
-                      : "ingredient-origin"
-                  }
-                >
-                  {item.isUserProvided ? "In your pantry" : "Add"}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-
-        <section className="detail-section">
-          <p className="eyebrow">Let’s make it</p>
-          <h3>Cooking steps</h3>
-          <ol className="cooking-steps">
-            {recipe.instructions.map((instruction) => (
-              <li key={instruction.step}>
-                <span className="step-number">
-                  {String(instruction.step).padStart(2, "0")}
-                </span>
-                <div>
-                  <p>{instruction.text}</p>
-                  {instruction.durationMinutes > 0 && (
-                    <small>About {instruction.durationMinutes} min</small>
-                  )}
-                </div>
-              </li>
-            ))}
-          </ol>
-        </section>
-
-        {recipe.substitutions.length > 0 && (
-          <section className="detail-section">
-            <p className="eyebrow">Make it work</p>
-            <h3>Easy swaps</h3>
-            <ul className="substitution-list">
-              {recipe.substitutions.map((substitution) => (
-                <li
-                  key={
-                    substitution.originalIngredient + substitution.alternative
-                  }
-                >
-                  <strong>
-                    {substitution.originalIngredient}{" "}
-                    <span aria-hidden="true">→</span> {substitution.alternative}
-                  </strong>
-                  <p>{substitution.note}</p>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-
-        {recipe.warnings.length > 0 && (
-          <aside className="recipe-warning">
-            <span className="warning-mark" aria-hidden="true">
-              !
-            </span>
-            <div>
-              <strong>A small note</strong>
-              <ul>
-                {recipe.warnings.map((warning) => (
-                  <li key={warning}>{warning}</li>
-                ))}
-              </ul>
-            </div>
-          </aside>
-        )}
-
-        <p className="dialog-disclaimer">
-          AI-generated idea. Check ingredients, allergens, and safe cooking
-          temperatures before you begin.
-        </p>
+        <RecipeView
+          key={recipe.id}
+          recipe={view}
+          titleId="recipe-dialog-title"
+          actions={actions}
+        />
       </div>
+      {cooking && <CookMode recipe={view} onClose={() => setCooking(false)} />}
     </dialog>
   );
 }
